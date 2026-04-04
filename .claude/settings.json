@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(node scripts/seed-dev-user.mjs)",
+      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('next:', p.dependencies?.next, '\\\\nnodemailer:', p.dependencies?.nodemailer\\)\")",
+      "Bash(node -e \"const p = require\\('c:/Users/crpla/OneDrive/Desktop/aPPS/hiring/node_modules/nodemailer/package.json'\\); console.log\\('version:', p.version, 'type:', p.type || 'cjs'\\)\")",
+      "Bash(cat \"c:/Users/crpla/OneDrive/Desktop/aPPS/hiring/.next/diagnostics/\"*.json)"
+    ]
+  }
+}
