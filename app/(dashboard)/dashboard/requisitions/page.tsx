@@ -6,6 +6,7 @@ import { Plus, MapPin, Users, Calendar, ChevronRight, Search, Filter, Sparkles }
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
+import { ScreeningFormModal } from "@/components/ScreeningFormModal";
 import { requisitionStatusBadge, formatDate } from "@/lib/utils";
 
 interface Requisition {
@@ -51,6 +52,7 @@ export default function RequisitionsPage() {
   const [approvalRemarks, setApprovalRemarks] = useState("");
   const [approving, setApproving] = useState(false);
   const [userRole, setUserRole] = useState("");
+  const [screeningReq, setScreeningReq] = useState<Requisition | null>(null);
 
   const fetchRequisitions = useCallback(async () => {
     setLoading(true);
@@ -271,12 +273,14 @@ export default function RequisitionsPage() {
                   Review & Decide
                 </Button>
               )}
-              {selectedReq["Requisition Status"] === "OPEN" && (
-                <Link href={`/dashboard/screening/new?reqId=${selectedReq["Requisition Id"]}`}>
-                  <Button size="sm" variant="outline">
-                    Screen Candidate
-                  </Button>
-                </Link>
+              {selectedReq["Requisition Status"] !== "REJECTED" && selectedReq["Requisition Status"] !== "CLOSED" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setSelectedReq(null); setScreeningReq(selectedReq); }}
+                >
+                  Screen Candidate
+                </Button>
               )}
             </div>
 
@@ -353,17 +357,31 @@ export default function RequisitionsPage() {
             )}
 
             {/* Screening Link */}
-            {(selectedReq["Requisition Status"] === "OPEN" || selectedReq["Requisition Status"] === "APPROVED") && (
+            {selectedReq["Requisition Status"] !== "REJECTED" && selectedReq["Requisition Status"] !== "CLOSED" && (
               <div className="mt-4">
-                <Link href={`/dashboard/screening/new?reqId=${selectedReq["Requisition Id"]}`}>
-                  <Button className="w-full">
-                    Start Screening for this Role
-                  </Button>
-                </Link>
+                <Button
+                  className="w-full"
+                  onClick={() => { setSelectedReq(null); setScreeningReq(selectedReq); }}
+                >
+                  Start Screening for this Role
+                </Button>
               </div>
             )}
           </div>
         </Modal>
+      )}
+
+      {/* Screening Form Modal */}
+      {screeningReq && (
+        <ScreeningFormModal
+          open={!!screeningReq}
+          requisition={screeningReq}
+          onClose={() => setScreeningReq(null)}
+          onSuccess={() => {
+            setScreeningReq(null);
+            fetchRequisitions();
+          }}
+        />
       )}
 
       {/* Approval Modal */}

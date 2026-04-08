@@ -4,7 +4,7 @@ import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea, Select } from "@/components/ui/Input";
-import { Badge } from "@/components/ui/Badge";
+
 import { Sparkles, Upload, ArrowLeft, FileText, Loader2 } from "lucide-react";
 
 const SOURCES = ["Naukri Posting", "Naukri Search", "LinkedIn", "Indeed", "Employee Reference", "Walk-In", "Other"];
@@ -21,6 +21,8 @@ function ScreeningFormInner() {
   const [extracting, setExtracting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
+  const [resumeFile, setResumeFile] = useState<{ name: string; size: number } | null>(null);
+  const [driveError, setDriveError] = useState("");
 
   const [form, setForm] = useState({
     reqId,
@@ -77,9 +79,29 @@ function ScreeningFormInner() {
     if (!file) return;
 
     setError("");
+    setResumeFile({ name: file.name, size: file.size });
 
-    // Step 1: Drive upload (no-op until Shared Drive is configured — skipped silently)
-    setUploading(false);
+    // Step 1: Upload resume to Drive
+    setDriveError("");
+    setUploading(true);
+    try {
+      const fd0 = new FormData();
+      fd0.append("file", file);
+      fd0.append("folder", "RESUMES");
+      fd0.append("subFolder", `temp_${Date.now()}`);
+      const upRes = await fetch("/api/upload", { method: "POST", body: fd0 });
+      const upData = await upRes.json();
+      if (upData.url) {
+        update("resumeUrl", upData.url);
+      } else if (upData.error) {
+        setDriveError(upData.error);
+      }
+    } catch (upErr) {
+      setDriveError("Drive upload failed — check server logs.");
+      console.error("[CV Upload] Drive upload failed:", upErr);
+    } finally {
+      setUploading(false);
+    }
 
     // Step 2: Extract CV details via AI
     setExtracting(true);
@@ -90,7 +112,8 @@ function ScreeningFormInner() {
       const data = await res.json();
 
       console.log("[CV Extract] API response:", data);
-      const d = data.details ?? data; // handle if model returned flat object
+      const raw = data.details ?? data;
+      const d = Array.isArray(raw) ? raw[0] : raw; // AI sometimes returns array
       const str = (v: unknown) => (v != null && String(v).trim() !== "" ? String(v).trim() : "");
 
       const extracted = {
@@ -143,7 +166,7 @@ function ScreeningFormInner() {
     setUploading(false);
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!form.hrDecision) { setError("Please select Overall Fit Assessment"); return; }
     setError("");
@@ -162,8 +185,8 @@ function ScreeningFormInner() {
       }
       const { screeningId } = await res.json();
 
-      // Trigger AI evaluation in background
-      fetch(`/api/screening/${screeningId}/evaluate`, { method: "POST" }).catch(console.error);
+      // Trigger AI evaluation in background — keepalive prevents cancellation on navigation
+      fetch(`/api/screening/${encodeURIComponent(screeningId)}/evaluate`, { method: "POST", keepalive: true }).catch(console.error);
 
       router.push("/dashboard/candidates");
     } catch {
@@ -219,7 +242,7 @@ function ScreeningFormInner() {
         {/* CV Upload + OCR */}
         <div className="bg-white rounded-xl border border-slate-200 p-6">
           <h2 className="text-base font-semibold text-slate-700 mb-4">Resume Upload</h2>
-          <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-emerald-400 transition-colors">
+          <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${driveError ? "border-amber-400 bg-amber-50" : resumeFile ? "border-emerald-400 bg-emerald-50" : "border-slate-300 hover:border-emerald-400"}`}>
             <input
               type="file"
               accept=".pdf,.jpg,.jpeg,.png,.webp"
@@ -228,16 +251,36 @@ function ScreeningFormInner() {
               id="cv-upload"
             />
             <label htmlFor="cv-upload" className="cursor-pointer">
-              {extracting ? (
+              {uploading ? (
+                <div className="flex flex-col items-center gap-2 text-blue-600">
+                  <Loader2 className="w-8 h-8 animate-spin" />
+                  <p className="text-sm font-medium">Uploading to Drive…</p>
+                  {resumeFile && <p className="text-xs text-slate-500 truncate max-w-xs">{resumeFile.name}</p>}
+                </div>
+              ) : extracting ? (
                 <div className="flex flex-col items-center gap-2 text-emerald-600">
                   <Loader2 className="w-8 h-8 animate-spin" />
                   <p className="text-sm font-medium">Extracting candidate details via AI…</p>
+                  {resumeFile && <p className="text-xs text-emerald-500 truncate max-w-xs">{resumeFile.name}</p>}
                 </div>
-              ) : form.resumeUrl ? (
-                <div className="flex flex-col items-center gap-2 text-emerald-600">
-                  <FileText className="w-8 h-8" />
-                  <p className="text-sm font-medium">Resume uploaded & extracted</p>
-                  <p className="text-xs text-slate-400">Click to replace</p>
+              ) : resumeFile ? (
+                <div className="flex items-start gap-3 px-2">
+                  <FileText className={`w-9 h-9 shrink-0 mt-0.5 ${driveError ? "text-amber-500" : "text-emerald-600"}`} />
+                  <div className="text-left min-w-0 flex-1">
+                    <p className={`text-sm font-semibold truncate ${driveError ? "text-amber-700" : "text-emerald-700"}`}>{resumeFile.name}</p>
+                    <p className="text-xs text-slate-400">{(resumeFile.size / 1024).toFixed(1)} KB</p>
+                    {form.resumeUrl ? (
+                      <p className="text-xs text-emerald-600 mt-0.5 font-medium">✓ Saved to Drive</p>
+                    ) : driveError ? (
+                      <div className="mt-1">
+                        <p className="text-xs text-amber-600 font-medium">⚠ Drive upload failed — AI extraction still worked</p>
+                        <p className="text-xs text-amber-500 mt-0.5 break-all">{driveError.includes("storage quota") ? "Service account needs a Shared Drive. See setup instructions." : driveError}</p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-emerald-600 mt-0.5">✓ AI extracted · Drive save pending</p>
+                    )}
+                    <p className="text-xs text-slate-400 mt-1">Click to replace</p>
+                  </div>
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-2 text-slate-400">

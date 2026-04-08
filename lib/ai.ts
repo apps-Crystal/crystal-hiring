@@ -202,40 +202,80 @@ export async function evaluateCandidate(params: {
   hrDecision: string;
   screeningNotes: string;
   positionTitle: string;
+  keySkills?: string;
+  coreResponsibilities?: string;
+  experienceRequired?: string;
+  candidateData?: string;
+  hasRecording?: boolean;
 }): Promise<AIEvaluationResult> {
   const client = getClient();
 
+  // Detect if there is enough data to evaluate
+  const hasTranscript = params.transcript.trim().length > 30;
+  const hasNotes = params.screeningNotes.trim().length > 10;
+  const hasCandidateData = (params.candidateData ?? "").trim().length > 10;
+
+  if (!hasTranscript && !hasNotes && !hasCandidateData) {
+    return {
+      technicalScore: 0,
+      cultureScore: 0,
+      validationFlag: "Agrees",
+      validationReason: "INSUFFICIENT DATA — no transcript, screening notes, or candidate profile available to evaluate.",
+      strengths: "INSUFFICIENT DATA",
+      riskFlags: "INSUFFICIENT DATA",
+      summary: "INSUFFICIENT DATA — please ensure screening remarks or a call recording is provided.",
+    };
+  }
+
+  const dataSourceNote = params.hasRecording
+    ? "A call recording transcript is available below."
+    : "No call recording was provided. Evaluate based on HR screening notes and candidate profile data.";
+
   const prompt = `You are an expert AI hiring evaluator for Crystal Group, a logistics and supply chain company.
 
-Evaluate this candidate based on their screening call transcript.
+${dataSourceNote}
 
+═══ JOB REQUIREMENTS ═══
 Position: ${params.positionTitle}
+Required Experience: ${params.experienceRequired || "Not specified"}
+Key Skills Required: ${params.keySkills || "Not specified"}
+Core Responsibilities: ${params.coreResponsibilities || "Not specified"}
 
-TECHNICAL QUESTIONS ASKED:
-1. ${params.question1}
-2. ${params.question2}
-3. ${params.question3}
+═══ TECHNICAL SCREENING QUESTIONS ═══
+1. ${params.question1 || "Not provided"}
+2. ${params.question2 || "Not provided"}
+3. ${params.question3 || "Not provided"}
 
-COMPANY CULTURE GOALS:
-${params.cultureGoals}
+═══ COMPANY CULTURE GOALS ═══
+${params.cultureGoals || "Ownership, collaboration, continuous learning, customer-first thinking, integrity."}
 
-CALL TRANSCRIPT:
-${params.transcript}
+═══ CANDIDATE PROFILE ═══
+${params.candidateData || "No profile data available."}
 
-HR SCREENING NOTES:
-${params.screeningNotes}
+═══ ${params.hasRecording ? "CALL TRANSCRIPT" : "SCREENING REMARKS (no recording)"} ═══
+${params.transcript || params.screeningNotes || "No information provided."}
 
-HR PRELIMINARY DECISION: ${params.hrDecision}
+═══ HR SCREENING NOTES ═══
+${params.screeningNotes || "None"}
 
-Evaluate and return ONLY valid JSON:
+HR PRELIMINARY DECISION: ${params.hrDecision || "Not specified"}
+
+INSTRUCTIONS:
+- Score technically based on candidate's skills/experience vs job requirements${params.hasRecording ? " and answers to technical questions" : ""}
+- If data is limited (no recording), base technical score on resume skills vs JD requirements
+- Score culture fit based on screening notes, stability, communication patterns
+- Validate or challenge the HR decision with reasoning
+- Be specific about strengths and risks relative to THIS role
+
+Return ONLY valid JSON:
 {
-  "technicalScore": <0-10, based on quality of answers to the 3 technical questions>,
-  "cultureScore": <0-10, based on culture fit assessment>,
-  "validationFlag": <"Agrees" or "Disagrees" with HR decision>,
-  "validationReason": <brief explanation of agreement/disagreement>,
-  "strengths": <key strengths observed>,
-  "riskFlags": <any red flags or concerns>,
-  "summary": <2-3 sentence overall assessment>
+  "technicalScore": <0-10>,
+  "cultureScore": <0-10>,
+  "validationFlag": <"Agrees" or "Disagrees">,
+  "validationReason": "<specific reason referencing the role and candidate data>",
+  "strengths": "<key strengths relevant to this role>",
+  "riskFlags": "<concerns or gaps vs job requirements, or 'None identified'>",
+  "summary": "<2-3 sentence overall assessment referencing the position>"
 }`;
 
   const res = await client.chat.completions.create({

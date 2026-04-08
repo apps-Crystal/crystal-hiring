@@ -8,18 +8,55 @@ import { getSheetColumns } from "./sheet-schema";
 
 const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID!;
 
-function getAuth() {
-  return new google.auth.GoogleAuth({
+// ─────────────────────────────────────────────────────────────────────────────
+// SINGLETON CLIENT — reuse across requests in the same Node.js process
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getSheetsClient() {
+  const auth = new google.auth.GoogleAuth({
     credentials: {
       client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
       private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
     },
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
+  return google.sheets({ version: "v4", auth });
 }
 
-function getSheetsClient() {
-  return google.sheets({ version: "v4", auth: getAuth() });
+// ─────────────────────────────────────────────────────────────────────────────
+// PERSISTENT CACHE — survives Next.js hot reloads in dev via globalThis
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
+
+interface CacheEntry {
+  data: Record<string, string>[];
+  expiresAt: number;
+}
+
+// Attach to globalThis so the cache persists across Next.js hot module reloads
+const g = globalThis as typeof globalThis & { __sheetsCache?: Map<string, CacheEntry> };
+if (!g.__sheetsCache) g.__sheetsCache = new Map();
+const _cache = g.__sheetsCache;
+
+function getCached(key: string): Record<string, string>[] | null {
+  const entry = _cache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { _cache.delete(key); return null; }
+  return entry.data;
+}
+
+function setCache(key: string, data: Record<string, string>[]) {
+  _cache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+}
+
+export function invalidateCache(sheetName: string) {
+  // Remove all cache keys related to this sheet
+  for (const key of _cache.keys()) {
+    if (key === sheetName || key.startsWith(`${sheetName}::`)) {
+      _cache.delete(key);
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,6 +80,9 @@ export function generateScreeningId(seq: number): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function readSheet(sheetName: string): Promise<Record<string, string>[]> {
+  const cached = getCached(sheetName);
+  if (cached) return cached;
+
   const sheets = getSheetsClient();
   try {
     const res = await sheets.spreadsheets.values.get({
@@ -54,7 +94,7 @@ export async function readSheet(sheetName: string): Promise<Record<string, strin
     if (rows.length < 2) return [];
 
     const headers = (rows[0] as string[]).map((h) => h?.trim() ?? "");
-    return rows.slice(1)
+    const result = rows.slice(1)
       .filter((row) => (row as string[]).some((cell) => cell?.trim() !== ""))
       .map((row) => {
         const obj: Record<string, string> = {};
@@ -63,6 +103,9 @@ export async function readSheet(sheetName: string): Promise<Record<string, strin
         });
         return obj;
       });
+
+    setCache(sheetName, result);
+    return result;
   } catch (err) {
     if (err instanceof Error && err.message.includes("Unable to parse range")) {
       console.warn(`[sheets] Sheet "${sheetName}" not found — returning [].`);
@@ -72,6 +115,59 @@ export async function readSheet(sheetName: string): Promise<Record<string, strin
   }
 }
 
+/**
+ * Read only specific columns from a sheet — much faster for large sheets.
+ * Falls back to full readSheet if columns not found.
+ */
+export async function readSheetColumns(
+  sheetName: string,
+  columns: string[]
+): Promise<Record<string, string>[]> {
+  const cacheKey = `${sheetName}::${columns.sort().join(",")}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
+
+  // First get headers to find column positions
+  const sheets = getSheetsClient();
+  const headerRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${sheetName}!1:1`,
+  });
+  const headers = (headerRes.data.values?.[0] as string[]) ?? [];
+
+  // Find which column letters we need
+  const colIndexes = columns.map(c => headers.indexOf(c)).filter(i => i !== -1);
+  const foundHeaders = colIndexes.map(i => headers[i]);
+
+  if (colIndexes.length === 0) return readSheet(sheetName);
+
+  // Build ranges like "Screening!A:A,Screening!C:C"
+  const ranges = colIndexes.map(i => `${sheetName}!${columnIndexToLetter(i)}:${columnIndexToLetter(i)}`);
+
+  const batchRes = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId: SPREADSHEET_ID,
+    ranges,
+  });
+
+  const valueRanges = batchRes.data.valueRanges ?? [];
+  const maxRows = Math.max(...valueRanges.map(vr => (vr.values?.length ?? 0)));
+
+  const result: Record<string, string>[] = [];
+  for (let r = 1; r < maxRows; r++) {
+    const obj: Record<string, string> = {};
+    let hasValue = false;
+    foundHeaders.forEach((h, ci) => {
+      const val = (valueRanges[ci]?.values?.[r]?.[0] as string) ?? "";
+      obj[h] = val;
+      if (val.trim()) hasValue = true;
+    });
+    if (hasValue) result.push(obj);
+  }
+
+  setCache(cacheKey, result);
+  return result;
+}
+
 /** Read a single row by matching a key column value */
 export async function findRow(
   sheetName: string,
@@ -79,7 +175,29 @@ export async function findRow(
   keyVal: string
 ): Promise<Record<string, string> | null> {
   const rows = await readSheet(sheetName);
-  return rows.find((r) => r[keyCol] === keyVal) ?? null;
+  const matches = rows.filter((r) => r[keyCol] === keyVal);
+  return matches[matches.length - 1] ?? null;
+}
+
+/**
+ * Warm the cache for a sheet in the background.
+ */
+export function warmCache(sheetName: string): void {
+  if (!getCached(sheetName)) {
+    readSheet(sheetName).catch(() => {});
+  }
+}
+
+/**
+ * Preload all frequently-used sheets in parallel at startup.
+ * Call once from a layout or middleware.
+ */
+export function preloadCommonSheets(): void {
+  // Stagger preloads to avoid Google Sheets API rate limits
+  const sheets = ["Screening", "Requisition Form", "Interview Form"];
+  sheets.forEach((s, i) => {
+    setTimeout(() => warmCache(s), i * 800);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,20 +230,17 @@ export async function appendRowByFields(
     return String(val);
   });
 
-  // Use column A to find the true last data row, avoiding gaps caused by
-  // formula columns or stray content that make values.append skip rows.
-  const colA = await sheets.spreadsheets.values.get({
+  // Use append with INSERT_ROWS — auto-extends the sheet when it's full,
+  // and always inserts at the true end regardless of formula columns.
+  await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${sheetName}!A:A`,
-  });
-  const nextRow = (colA.data.values ?? []).length + 1;
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${sheetName}!A${nextRow}`,
+    range: `${sheetName}!A1`,
     valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
     requestBody: { values: [row] },
   });
+
+  invalidateCache(sheetName);
 }
 
 /** Update specific cells in a row identified by a key column */
@@ -149,8 +264,11 @@ export async function updateRowByKey(
   const keyColIdx = headers.indexOf(keyCol);
   if (keyColIdx === -1) return false;
 
-  // Find the row (1-indexed, +1 for header row)
-  const rowIdx = rows.findIndex((r, i) => i > 0 && r[keyColIdx] === keyVal);
+  // Find the LAST matching row (most recent submission wins over old duplicates)
+  let rowIdx = -1;
+  for (let i = rows.length - 1; i > 0; i--) {
+    if (rows[i][keyColIdx] === keyVal) { rowIdx = i; break; }
+  }
   if (rowIdx === -1) return false;
 
   const sheetRowNum = rowIdx + 1; // 1-based
@@ -178,6 +296,7 @@ export async function updateRowByKey(
     },
   });
 
+  invalidateCache(sheetName);
   return true;
 }
 

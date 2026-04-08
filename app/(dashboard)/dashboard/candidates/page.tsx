@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Filter, ChevronRight, Brain, User } from "lucide-react";
+import { Search, Filter, ChevronRight, Brain, User, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { decisionBadge, scoreBadgeClass, stageBadge } from "@/lib/utils";
@@ -31,10 +31,22 @@ export default function CandidatesPage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [stageFilter, setStageFilter] = useState("SCREENED");
+  const [stageFilter, setStageFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
-  const [decisionFilter, setDecisionFilter] = useState("");
+  const [decisionFilter, setDecisionFilter] = useState("Shortlisted");
   const [userRole, setUserRole] = useState("");
+  const [rerunning, setRerunning] = useState<string | null>(null);
+
+  async function rerunEvaluation(e: React.MouseEvent, screeningId: string) {
+    e.stopPropagation();
+    setRerunning(screeningId);
+    try {
+      await fetch(`/api/screening/${encodeURIComponent(screeningId)}/evaluate`, { method: "POST" });
+      await fetchCandidates();
+    } finally {
+      setRerunning(null);
+    }
+  }
 
   const fetchCandidates = useCallback(async () => {
     setLoading(true);
@@ -158,13 +170,15 @@ export default function CandidatesPage() {
                   const dec = decisionBadge(c["Overall Candidate Fit Assessment"]);
                   const stage = stageBadge(c["Stage"]);
                   const aiFlag = c["AI Validation Flag"];
-                  const aiEvalDone = c["AI Evaluation Status"] === "COMPLETED";
+                  const aiStatus = c["AI Evaluation Status"];
+                  const aiEvalDone = aiStatus === "COMPLETED";
+                  const aiNeedsRun = !aiStatus || aiStatus === "PENDING" || aiStatus === "FAILED";
 
                   return (
                     <tr
                       key={c["Screening ID"]}
                       className="hover:bg-slate-50 cursor-pointer transition-colors"
-                      onClick={() => router.push(`/dashboard/candidates/${c["Screening ID"]}`)}
+                      onClick={() => router.push(`/dashboard/candidates/${encodeURIComponent(c["Screening ID"])}`)}
                     >
                       <td className="px-4 py-3">
                         <p className="font-medium text-slate-800">{c["Candidate Name"] || "—"}</p>
@@ -213,8 +227,20 @@ export default function CandidatesPage() {
                       <td className="px-4 py-3">
                         <Badge className={stage.class}>{stage.label}</Badge>
                       </td>
-                      <td className="px-4 py-3">
-                        <ChevronRight className="w-4 h-4 text-slate-300" />
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-1">
+                          {aiNeedsRun && (
+                            <button
+                              onClick={(e) => rerunEvaluation(e, c["Screening ID"])}
+                              disabled={rerunning === c["Screening ID"]}
+                              title="Run AI Evaluation"
+                              className="p-1.5 rounded-lg text-purple-500 hover:bg-purple-50 transition-colors disabled:opacity-40"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${rerunning === c["Screening ID"] ? "animate-spin" : ""}`} />
+                            </button>
+                          )}
+                          <ChevronRight className="w-4 h-4 text-slate-300" />
+                        </div>
                       </td>
                     </tr>
                   );

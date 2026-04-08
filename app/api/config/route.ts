@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { getConfig, setConfig, getEmailList, getCultureGoals, getDocChecklist } from "@/lib/config";
+import { setConfig, getEmailList, getCultureGoals, getDocChecklist } from "@/lib/config";
 
 export async function GET(_req: NextRequest) {
   const session = await getSession();
@@ -55,7 +55,9 @@ export async function PUT(req: NextRequest) {
   if (body.docChecklist !== undefined)
     updates.push(["DOC_CHECKLIST", JSON.stringify(body.docChecklist)]);
 
-  await Promise.all(updates.map(([k, v]) => setConfig(k, v, session.name)));
+  for (const [k, v] of updates) {
+    await setConfig(k, v, session.name);
+  }
 
   return NextResponse.json({ ok: true });
 }

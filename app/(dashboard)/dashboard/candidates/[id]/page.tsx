@@ -17,7 +17,8 @@ interface Candidate extends Record<string, string> {}
 interface Interview extends Record<string, string> {}
 
 export default function CandidateProfilePage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+  const { id: rawId } = use(params);
+  const id = decodeURIComponent(rawId);
   const router = useRouter();
 
   const [candidate, setCandidate] = useState<Candidate | null>(null);
@@ -29,16 +30,20 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
 
   // Interview modal
   const [interviewModal, setInterviewModal] = useState(false);
-  const [interviewType, setInterviewType] = useState<"platform" | "token">("platform");
+  const [interviewType, setInterviewType] = useState<"platform" | "token">("token");
   const [iForm, setIForm] = useState({
     round: "Round 1",
+    interviewDate: "",
+    interviewMode: "Video Call",
+    interviewLocation: "",
+    interviewerName: "",
+    interviewerEmail: "",
     feedback: "",
     decision: "",
     recordingUrl: "",
-    interviewerEmail: "",
-    interviewerName: "",
   });
   const [submittingInterview, setSubmittingInterview] = useState(false);
+  const [tokenLink, setTokenLink] = useState("");
 
   // Document request
   const [requestingDocs, setRequestingDocs] = useState(false);
@@ -46,10 +51,12 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
   // Move to interview queue
   const [movingToInterview, setMovingToInterview] = useState(false);
 
+  const encodedId = encodeURIComponent(id); // id is decoded; re-encode for fetch URLs
+
   useEffect(() => {
     Promise.all([
-      fetch(`/api/screening/${id}`).then(r => r.json()),
-      fetch(`/api/interviews?screeningId=${id}`).then(r => r.json()),
+      fetch(`/api/screening/${encodedId}`).then(r => r.json()),
+      fetch(`/api/interviews?screeningId=${encodedId}`).then(r => r.json()),
       fetch("/api/auth/session").then(r => r.json()),
     ]).then(([cData, iData, sData]) => {
       setCandidate(cData.candidate ?? null);
@@ -57,11 +64,11 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
       setUserRole(sData.user?.role ?? "");
       setLoading(false);
     });
-  }, [id]);
+  }, [encodedId]);
 
   async function moveToInterview() {
     setMovingToInterview(true);
-    await fetch(`/api/screening/${id}`, {
+    await fetch(`/api/screening/${encodedId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ Stage: "INTERVIEW" }),
@@ -71,8 +78,8 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
   }
 
   async function submitInterview() {
-    if (!iForm.decision) return;
     setSubmittingInterview(true);
+    setTokenLink("");
 
     const body: Record<string, string> = {
       type: interviewType,
@@ -81,15 +88,15 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
       candidateEmail: candidate?.["Email Id"] ?? "",
       position: candidate?.["Position Screened for"] ?? "",
       round: iForm.round,
+      interviewDate: iForm.interviewDate,
+      interviewMode: iForm.interviewMode,
+      interviewLocation: iForm.interviewLocation,
+      interviewerName: iForm.interviewerName,
+      interviewerEmail: iForm.interviewerEmail,
       feedback: iForm.feedback,
       decision: iForm.decision,
       recordingUrl: iForm.recordingUrl,
     };
-
-    if (interviewType === "token") {
-      body.interviewerEmail = iForm.interviewerEmail;
-      body.interviewerName = iForm.interviewerName;
-    }
 
     const res = await fetch("/api/interviews", {
       method: "POST",
@@ -98,9 +105,15 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
     });
 
     if (res.ok) {
-      setInterviewModal(false);
-      // Refresh interviews
-      const iData = await fetch(`/api/interviews?screeningId=${id}`).then(r => r.json());
+      const data = await res.json();
+      if (data.link) {
+        // Token link generated — show it in modal instead of closing
+        setTokenLink(data.link);
+      } else {
+        setInterviewModal(false);
+        setIForm({ round: "Round 1", interviewDate: "", interviewMode: "Video Call", interviewLocation: "", interviewerName: "", interviewerEmail: "", feedback: "", decision: "", recordingUrl: "" });
+      }
+      const iData = await fetch(`/api/interviews?screeningId=${encodedId}`).then(r => r.json());
       setInterviews(iData.interviews ?? []);
     }
     setSubmittingInterview(false);
@@ -303,7 +316,7 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
                   size="sm"
                   variant="outline"
                   onClick={async () => {
-                    await fetch(`/api/screening/${id}/evaluate`, { method: "POST" });
+                    await fetch(`/api/screening/${encodedId}/evaluate`, { method: "POST" });
                     window.location.reload();
                   }}
                 >
@@ -444,95 +457,172 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
       {/* Interview Modal */}
       <Modal
         open={interviewModal}
-        onClose={() => setInterviewModal(false)}
-        title="Add Interview Round"
+        onClose={() => { setInterviewModal(false); setTokenLink(""); }}
+        title="Schedule Interview"
         size="md"
       >
         <div className="p-6 space-y-4">
-          {/* Type Toggle */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setInterviewType("platform")}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                interviewType === "platform" ? "bg-emerald-600 text-white border-emerald-600" : "border-slate-300 text-slate-600"
-              }`}
-            >
-              Log on Platform
-            </button>
-            <button
-              onClick={() => setInterviewType("token")}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                interviewType === "token" ? "bg-emerald-600 text-white border-emerald-600" : "border-slate-300 text-slate-600"
-              }`}
-            >
-              Send Token Link
-            </button>
-          </div>
 
-          <Select
-            label="Interview Round"
-            required
-            value={iForm.round}
-            onChange={(e) => setIForm(prev => ({ ...prev, round: e.target.value }))}
-            options={["Round 1", "Round 2", "Round 3", "Technical Evaluation", "CV Evaluation", "JD Evaluation", "General Discussion"].map(r => ({ value: r, label: r }))}
-          />
-
-          {interviewType === "token" ? (
-            <>
-              <Input
-                label="Interviewer Name"
-                required
-                value={iForm.interviewerName}
-                onChange={(e) => setIForm(prev => ({ ...prev, interviewerName: e.target.value }))}
-              />
-              <Input
-                label="Interviewer Email"
-                type="email"
-                required
-                value={iForm.interviewerEmail}
-                onChange={(e) => setIForm(prev => ({ ...prev, interviewerEmail: e.target.value }))}
-              />
-              <p className="text-xs text-slate-500">A secure token link will be emailed. No login required for the interviewer.</p>
-            </>
-          ) : (
-            <>
-              <Textarea
-                label="Interviewer Feedback"
-                rows={4}
-                required
-                value={iForm.feedback}
-                onChange={(e) => setIForm(prev => ({ ...prev, feedback: e.target.value }))}
-              />
+          {/* Token sent success state */}
+          {tokenLink ? (
+            <div className="space-y-4">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+                <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-2">
+                  <Send className="w-5 h-5 text-emerald-600" />
+                </div>
+                <p className="text-sm font-semibold text-emerald-800">Interview link sent to {iForm.interviewerEmail}</p>
+                <p className="text-xs text-emerald-600 mt-1">The interviewer can submit feedback without logging in</p>
+              </div>
               <div>
-                <label className="text-sm font-medium text-slate-700 block mb-1.5">Final Decision <span className="text-red-500">*</span></label>
-                <div className="flex gap-2">
-                  {["Proceed", "Hold", "Reject"].map(d => (
-                    <button
-                      key={d}
-                      onClick={() => setIForm(prev => ({ ...prev, decision: d }))}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                        iForm.decision === d
-                          ? d === "Proceed" ? "bg-emerald-600 text-white border-emerald-600"
-                          : d === "Hold" ? "bg-yellow-500 text-white border-yellow-500"
-                          : "bg-red-600 text-white border-red-600"
-                          : "border-slate-300 text-slate-600"
-                      }`}
-                    >
-                      {d}
-                    </button>
-                  ))}
+                <p className="text-xs text-slate-500 mb-1.5 font-medium">Token Link (copy as backup)</p>
+                <div className="flex items-center gap-2">
+                  <input
+                    readOnly
+                    value={tokenLink}
+                    className="flex-1 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-600"
+                  />
+                  <button
+                    onClick={() => navigator.clipboard.writeText(tokenLink)}
+                    className="px-3 py-2 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600 transition-colors whitespace-nowrap"
+                  >
+                    Copy
+                  </button>
                 </div>
               </div>
+              <Button className="w-full" onClick={() => { setInterviewModal(false); setTokenLink(""); setIForm({ round: "Round 1", interviewDate: "", interviewMode: "Video Call", interviewLocation: "", interviewerName: "", interviewerEmail: "", feedback: "", decision: "", recordingUrl: "" }); }}>
+                Done
+              </Button>
+            </div>
+          ) : (
+            <>
+              {/* Mode Toggle */}
+              <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
+                <button
+                  onClick={() => setInterviewType("token")}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    interviewType === "token" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  Send Token Link
+                </button>
+                <button
+                  onClick={() => setInterviewType("platform")}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    interviewType === "platform" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  Log on Platform
+                </button>
+              </div>
+
+              {/* Common fields */}
+              <div className="grid grid-cols-2 gap-3">
+                <Select
+                  label="Interview Round"
+                  required
+                  value={iForm.round}
+                  onChange={(e) => setIForm(prev => ({ ...prev, round: e.target.value }))}
+                  options={["Round 1", "Round 2", "Round 3", "Technical Evaluation", "CV Evaluation", "JD Evaluation", "General Discussion"].map(r => ({ value: r, label: r }))}
+                />
+                <Select
+                  label="Mode"
+                  value={iForm.interviewMode}
+                  onChange={(e) => setIForm(prev => ({ ...prev, interviewMode: e.target.value }))}
+                  options={["Video Call", "In Person", "Phone Call", "Panel"].map(m => ({ value: m, label: m }))}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Interview Date"
+                  type="date"
+                  value={iForm.interviewDate}
+                  onChange={(e) => setIForm(prev => ({ ...prev, interviewDate: e.target.value }))}
+                />
+                <Input
+                  label="Location / Link"
+                  value={iForm.interviewLocation}
+                  placeholder="Office / Meet link"
+                  onChange={(e) => setIForm(prev => ({ ...prev, interviewLocation: e.target.value }))}
+                />
+              </div>
+
+              {/* Token-specific */}
+              {interviewType === "token" && (
+                <div className="space-y-3 pt-1 border-t border-slate-100">
+                  <p className="text-xs text-slate-500 font-medium">Interviewer Details — a secure link will be emailed, no login needed</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input
+                      label="Interviewer Name"
+                      required
+                      value={iForm.interviewerName}
+                      onChange={(e) => setIForm(prev => ({ ...prev, interviewerName: e.target.value }))}
+                    />
+                    <Input
+                      label="Interviewer Email"
+                      type="email"
+                      required
+                      value={iForm.interviewerEmail}
+                      onChange={(e) => setIForm(prev => ({ ...prev, interviewerEmail: e.target.value }))}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Platform-specific */}
+              {interviewType === "platform" && (
+                <div className="space-y-3 pt-1 border-t border-slate-100">
+                  <Input
+                    label="Interviewer Name"
+                    value={iForm.interviewerName}
+                    onChange={(e) => setIForm(prev => ({ ...prev, interviewerName: e.target.value }))}
+                  />
+                  <Textarea
+                    label="Interviewer Feedback"
+                    rows={3}
+                    required
+                    value={iForm.feedback}
+                    onChange={(e) => setIForm(prev => ({ ...prev, feedback: e.target.value }))}
+                  />
+                  <div>
+                    <label className="text-sm font-medium text-slate-700 block mb-1.5">Final Decision <span className="text-red-500">*</span></label>
+                    <div className="flex gap-2">
+                      {["Proceed", "Hold", "Reject"].map(d => (
+                        <button
+                          key={d}
+                          onClick={() => setIForm(prev => ({ ...prev, decision: d }))}
+                          className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                            iForm.decision === d
+                              ? d === "Proceed" ? "bg-emerald-600 text-white border-emerald-600"
+                              : d === "Hold" ? "bg-yellow-500 text-white border-yellow-500"
+                              : "bg-red-600 text-white border-red-600"
+                              : "border-slate-300 text-slate-600"
+                          }`}
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <Button
+                className="w-full"
+                onClick={submitInterview}
+                disabled={
+                  submittingInterview ||
+                  (interviewType === "platform" && !iForm.decision) ||
+                  (interviewType === "token" && (!iForm.interviewerEmail || !iForm.interviewerName))
+                }
+              >
+                {submittingInterview
+                  ? "Scheduling…"
+                  : interviewType === "token"
+                  ? "Send Interview Link"
+                  : "Schedule & Log Interview"}
+              </Button>
             </>
           )}
-
-          <Button
-            className="w-full"
-            onClick={submitInterview}
-            disabled={submittingInterview || (interviewType === "platform" && !iForm.decision) || (interviewType === "token" && !iForm.interviewerEmail)}
-          >
-            {submittingInterview ? "Submitting…" : interviewType === "token" ? "Send Interview Link" : "Save Interview Feedback"}
-          </Button>
         </div>
       </Modal>
     </div>

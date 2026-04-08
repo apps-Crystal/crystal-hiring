@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
+import { uploadFile } from "@/lib/drive";
 
-// NOTE: Google Drive upload is disabled — service accounts cannot write to
-// regular "My Drive" folders (no storage quota). Files are processed in-memory
-// for AI extraction only. Switch ROOT_FOLDER_ID to a Shared Drive to re-enable.
+const FOLDER_MAP: Record<string, string[]> = {
+  RESUMES: ["HIRING", "RESUMES"],
+  RECORDINGS: ["HIRING", "RECORDINGS"],
+  DOCUMENTS: ["HIRING", "DOCUMENTS"],
+  JD: ["HIRING", "JD"],
+  INTERVIEW_RECORDINGS: ["HIRING", "INTERVIEW_RECORDINGS"],
+  BGV: ["HIRING", "BGV"],
+};
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,6 +18,8 @@ export async function POST(req: NextRequest) {
 
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
+    const folder = (formData.get("folder") as string | null) ?? "RESUMES";
+    const subFolder = formData.get("subFolder") as string | null;
 
     if (!file) return NextResponse.json({ error: "No file" }, { status: 400 });
 
@@ -20,8 +28,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "File too large (max 10MB)" }, { status: 400 });
     }
 
-    // Return a placeholder — Drive upload skipped until a Shared Drive is configured.
-    return NextResponse.json({ url: "", fileId: "" });
+    const basePath = FOLDER_MAP[folder] ?? ["HIRING", folder];
+    const folderPath = subFolder ? [...basePath, subFolder] : basePath;
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const { fileId, webViewLink } = await uploadFile(buffer, file.name, file.type, folderPath);
+
+    return NextResponse.json({ url: webViewLink, fileId });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error("[Upload] Error:", message);

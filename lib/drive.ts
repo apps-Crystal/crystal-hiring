@@ -43,9 +43,8 @@ async function getOrCreateFolder(name: string, parentId: string): Promise<string
     fields: "files(id)",
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
+    corpora: "allDrives",
   });
-
-  console.log(res.data);
 
   if (res.data.files && res.data.files.length > 0) {
     return res.data.files[0].id!;

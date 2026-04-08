@@ -95,7 +95,7 @@ export default function ScreeningPage() {
                 const dec = decisionBadge(r["Overall Candidate Fit Assessment"]);
                 const aiStatus = r["AI Evaluation Status"];
                 return (
-                  <tr key={i} className="hover:bg-slate-50 cursor-pointer" onClick={() => router.push(`/dashboard/candidates/${r["Screening ID"]}`)}>
+                  <tr key={i} className="hover:bg-slate-50 cursor-pointer" onClick={() => router.push(`/dashboard/candidates/${encodeURIComponent(r["Screening ID"])}`)}>
                     <td className="px-4 py-3">
                       <p className="font-medium text-slate-800">{r["Candidate Name"] || "—"}</p>
                       <p className="text-xs text-slate-400 font-mono">{r["Screening ID"]}</p>

@@ -1,12 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readSheet, appendRowByFields, getNextSeq, generateScreeningId, nowTimestamp } from "@/lib/sheets";
+import { readSheet, readSheetColumns, appendRowByFields, getNextSeq, generateScreeningId, nowTimestamp, warmCache } from "@/lib/sheets";
 import { getSession } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const rows = await readSheet("Screening");
+  // Warm the full sheet cache in background so candidate profile loads instantly
+  warmCache("Screening");
+
+  // Only fetch columns needed for the list view — much faster on large sheets
+  const rows = await readSheetColumns("Screening", [
+    "Screening ID", "Candidate Name", "Source", "Position Screened for",
+    "Total Years of Experience", "Timestamp", "Overall Candidate Fit Assessment",
+    "AI Technical Score", "AI Culture Score", "AI Validation Flag",
+    "AI Evaluation Status", "Stage", "Job location?", "Requisition Id",
+    "Current CTC (In Lakhs)", "Expected CTC (In Lakhs)",
+  ]);
 
   const reqId  = req.nextUrl.searchParams.get("reqId");
   const stage  = req.nextUrl.searchParams.get("stage");
