@@ -125,6 +125,94 @@ export async function uploadFile(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DOWNLOAD
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Extract Drive file ID from common webViewLink / open URL shapes */
+export function extractDriveFileId(url: string): string | null {
+  if (!url) return null;
+  // https://drive.google.com/file/d/<ID>/view
+  const m1 = url.match(/\/file\/d\/([^/]+)/);
+  if (m1) return m1[1];
+  // https://drive.google.com/open?id=<ID>
+  const m2 = url.match(/[?&]id=([^&]+)/);
+  if (m2) return m2[1];
+  // https://drive.google.com/uc?id=<ID>
+  return null;
+}
+
+export interface DownloadedFile {
+  buffer: Buffer;
+  mimeType: string;
+  fileName: string;
+}
+
+/** Search Drive for a file by exact name. Returns the first match. */
+export async function findDriveFileByName(name: string): Promise<{ id: string; webViewLink: string; mimeType: string } | null> {
+  if (!name) return null;
+  const drive = getDriveClient();
+  // Escape single quotes in name for the query string
+  const safe = name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const res = await drive.files.list({
+    q: `name='${safe}' and trashed=false`,
+    fields: "files(id, webViewLink, mimeType, name)",
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+    corpora: "allDrives",
+    pageSize: 1,
+  });
+  const f = res.data.files?.[0];
+  if (!f?.id) return null;
+  return {
+    id: f.id,
+    webViewLink: f.webViewLink ?? `https://drive.google.com/file/d/${f.id}/view`,
+    mimeType: f.mimeType ?? "application/octet-stream",
+  };
+}
+
+/** Download a file by its Drive file ID */
+export async function downloadDriveFileById(fileId: string): Promise<DownloadedFile | null> {
+  const drive = getDriveClient();
+  const meta = await drive.files.get({
+    fileId,
+    fields: "id, name, mimeType, size",
+    supportsAllDrives: true,
+  });
+  const mimeType = (meta.data as { mimeType?: string }).mimeType ?? "application/octet-stream";
+  const fileName = (meta.data as { name?: string }).name ?? "file";
+  const res = await drive.files.get(
+    { fileId, alt: "media", supportsAllDrives: true },
+    { responseType: "arraybuffer" }
+  );
+  return { buffer: Buffer.from(res.data as ArrayBuffer), mimeType, fileName };
+}
+
+export async function downloadDriveFileByUrl(url: string): Promise<DownloadedFile | null> {
+  const fileId = extractDriveFileId(url);
+  if (!fileId) return null;
+
+  const drive = getDriveClient();
+
+  // Get metadata first for mime type and name
+  const meta = await drive.files.get({
+    fileId,
+    fields: "id, name, mimeType, size",
+    supportsAllDrives: true,
+  });
+  const mimeType = (meta.data as { mimeType?: string }).mimeType ?? "application/octet-stream";
+  const fileName = (meta.data as { name?: string }).name ?? "file";
+
+  // Download bytes
+  const res = await drive.files.get(
+    { fileId, alt: "media", supportsAllDrives: true },
+    { responseType: "arraybuffer" }
+  );
+
+  const buffer = Buffer.from(res.data as ArrayBuffer);
+  return { buffer, mimeType, fileName };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FOLDER PATH PRESETS
 // ─────────────────────────────────────────────────────────────────────────────
 

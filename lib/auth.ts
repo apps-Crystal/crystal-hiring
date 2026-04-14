@@ -101,6 +101,100 @@ export async function verifyInterviewToken(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Management Approval Token (for management — approve offers via email link)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ApprovalTokenPayload {
+  screeningId: string;
+  candidateName: string;
+  position: string;
+  type: "approval_token";
+}
+
+export async function signApprovalToken(payload: ApprovalTokenPayload): Promise<string> {
+  return new SignJWT({ ...payload })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("14d")
+    .sign(JWT_SECRET);
+}
+
+export async function verifyApprovalToken(
+  token: string
+): Promise<ApprovalTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, JWT_SECRET);
+    if ((payload as Record<string, unknown>).type !== "approval_token") return null;
+    return payload as unknown as ApprovalTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Offer Token (for candidates — accept/decline the offer, no login)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface OfferTokenPayload {
+  screeningId: string;
+  candidateName: string;
+  position: string;
+  offerLetterUrl: string;
+  type: "offer_token";
+}
+
+export async function signOfferToken(payload: OfferTokenPayload): Promise<string> {
+  return new SignJWT({ ...payload })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("30d")
+    .sign(JWT_SECRET);
+}
+
+export async function verifyOfferToken(
+  token: string
+): Promise<OfferTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, JWT_SECRET);
+    if ((payload as Record<string, unknown>).type !== "offer_token") return null;
+    return payload as unknown as OfferTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Document Token (for candidates — no login required to submit documents)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface DocumentTokenPayload {
+  screeningId: string;
+  candidateName: string;
+  position: string;
+  type: "document_token";
+}
+
+export async function signDocumentToken(payload: DocumentTokenPayload): Promise<string> {
+  return new SignJWT({ ...payload })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("30d")
+    .sign(JWT_SECRET);
+}
+
+export async function verifyDocumentToken(
+  token: string
+): Promise<DocumentTokenPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, JWT_SECRET);
+    if ((payload as Record<string, unknown>).type !== "document_token") return null;
+    return payload as unknown as DocumentTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Role helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -109,6 +203,7 @@ export function canApproveRequisition(role: string): boolean {
 }
 
 export function canApproveOffer(role: string): boolean {
+  // Manager-level approval only. CHRO is treated as developer/full-access.
   return ["CHRO", "MANAGEMENT"].includes(role);
 }
 

@@ -25,15 +25,42 @@ export default function InterviewsPage() {
       });
   }, []);
 
-  const filtered = interviews.filter(iv => {
+  // Group by Screening ID — one row per candidate, keep latest interview.
+  // Also collect all rounds, so filters still work across history.
+  const grouped = (() => {
+    const map = new Map<string, { latest: Interview; rounds: Set<string>; decisions: Set<string>; count: number }>();
+    for (const iv of interviews) {
+      const sid = iv["Screening ID (Auto)"] || "";
+      if (!sid) continue;
+      const existing = map.get(sid);
+      if (!existing) {
+        map.set(sid, {
+          latest: iv,
+          rounds: new Set([iv["Interview for Round"]].filter(Boolean)),
+          decisions: new Set([iv["Final Decision"]].filter(Boolean)),
+          count: 1,
+        });
+      } else {
+        existing.count += 1;
+        if (iv["Interview for Round"]) existing.rounds.add(iv["Interview for Round"]);
+        if (iv["Final Decision"]) existing.decisions.add(iv["Final Decision"]);
+        // Interviews in sheet are chronological — later row wins as "latest"
+        existing.latest = iv;
+      }
+    }
+    return [...map.values()];
+  })();
+
+  const filtered = grouped.filter(g => {
+    const iv = g.latest;
     const q = search.toLowerCase();
     if (search && !(
       iv["Candidate Name (Auto)"]?.toLowerCase().includes(q) ||
       iv["Screening ID (Auto)"]?.toLowerCase().includes(q) ||
       iv["Position Screened For (Auto)"]?.toLowerCase().includes(q)
     )) return false;
-    if (roundFilter && iv["Interview for Round"] !== roundFilter) return false;
-    if (decisionFilter && iv["Final Decision"] !== decisionFilter) return false;
+    if (roundFilter && !g.rounds.has(roundFilter)) return false;
+    if (decisionFilter && !g.decisions.has(decisionFilter)) return false;
     return true;
   });
 
@@ -45,7 +72,7 @@ export default function InterviewsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Interview Rounds</h1>
-          <p className="text-slate-500 text-sm mt-1">{filtered.length} interview records</p>
+          <p className="text-slate-500 text-sm mt-1">{filtered.length} candidates · {interviews.length} interview rounds</p>
         </div>
       </div>
 
@@ -103,7 +130,8 @@ export default function InterviewsPage() {
                 </td>
               </tr>
             ) : (
-              filtered.map((iv, i) => {
+              filtered.map((g, i) => {
+                const iv = g.latest;
                 const dec = decisionBadge(iv["Final Decision"]);
                 return (
                   <tr key={i} className="hover:bg-slate-50 cursor-pointer" onClick={() => router.push(`/dashboard/candidates/${iv["Screening ID (Auto)"]}`)}>
@@ -112,7 +140,10 @@ export default function InterviewsPage() {
                       <p className="text-xs text-slate-400 font-mono">{iv["Screening ID (Auto)"]}</p>
                     </td>
                     <td className="px-4 py-3 text-slate-600">{iv["Position Screened For (Auto)"] || "—"}</td>
-                    <td className="px-4 py-3"><Badge className="bg-purple-100 text-purple-700">{iv["Interview for Round"] || "—"}</Badge></td>
+                    <td className="px-4 py-3">
+                      <Badge className="bg-purple-100 text-purple-700">{iv["Interview for Round"] || "—"}</Badge>
+                      {g.count > 1 && <span className="ml-2 text-xs text-slate-400">+{g.count - 1} more</span>}
+                    </td>
                     <td className="px-4 py-3 text-slate-600">{iv["Interviewed By"] || "—"}</td>
                     <td className="px-4 py-3"><Badge className={dec.class}>{dec.label || "—"}</Badge></td>
                     <td className="px-4 py-3 text-slate-500 text-xs">{iv["Date (dd / mm /yy)"] || iv["Timestamp"]?.split(",")[0]}</td>

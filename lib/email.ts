@@ -18,7 +18,7 @@ function createTransporter() {
   });
 }
 
-const FROM = `Crystal Group HR <${process.env.SMTP_USER ?? "apps@crystalgroup.in"}>`;
+const FROM = `Crystal Group HR <${process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "apps@crystalgroup.in"}>`;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -271,6 +271,37 @@ export async function sendOfferApprovalRequest(params: {
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. OFFER LETTER → Candidate
 // ─────────────────────────────────────────────────────────────────────────────
+
+export async function sendOfferIssued(params: {
+  to: string;
+  candidateName: string;
+  position: string;
+  doj: string;
+  finalCTC: string;
+  hiringLocation: string;
+  offerLetterUrl: string;
+  acceptLink: string;
+}) {
+  const body = `
+<p>Dear ${params.candidateName},</p>
+<p>Congratulations! We are delighted to extend you an offer to join <strong>Crystal Group</strong> as <strong>${params.position}</strong>.</p>
+<table>
+  <tr><td>Designation</td><td><strong>${params.position}</strong></td></tr>
+  <tr><td>Location</td><td>${params.hiringLocation}</td></tr>
+  <tr><td>Final CTC (Per Annum)</td><td>₹ ${params.finalCTC}</td></tr>
+  <tr><td>Date of Joining</td><td>${params.doj}</td></tr>
+</table>
+<p><strong>Your Offer Letter:</strong> <a href="${params.offerLetterUrl}">Download Offer Letter (PDF)</a></p>
+<p>Please review the offer letter, then use the secure link below to accept or decline and upload your signed copy & resignation proof:</p>
+<a href="${params.acceptLink}" class="btn">Accept or Decline Offer</a>
+<p style="color:#94a3b8;font-size:12px;margin-top:12px;">Please respond within 7 days of receipt. No login required — this link is unique to you.</p>`;
+
+  await send(
+    params.to,
+    `Offer Letter — ${params.position} at Crystal Group`,
+    baseTemplate("Your Offer Letter from Crystal Group", body)
+  );
+}
 
 export async function sendOfferToCandidate(params: {
   to: string;

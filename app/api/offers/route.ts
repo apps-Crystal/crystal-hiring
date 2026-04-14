@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readSheet, appendRowByFields, findRow, updateRowByKey, nowTimestamp } from "@/lib/sheets";
-import { getSession } from "@/lib/auth";
+import { getSession, signApprovalToken } from "@/lib/auth";
 import { sendOfferApprovalRequest } from "@/lib/email";
 import { getEmailList } from "@/lib/config";
 
@@ -8,16 +8,54 @@ export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const rows = await readSheet("Offer Approval Request");
-  const screeningId = req.nextUrl.searchParams.get("screeningId");
+  // Read all 3 sheets in parallel so we can derive the current status of
+  // each offer without depending on extra columns in the request sheet.
+  const [rows, decisions, issued] = await Promise.all([
+    readSheet("Offer Approval Request"),
+    readSheet("Management Offer Approval Form"),
+    readSheet("Issue Offer Form"),
+  ]);
 
+  // Build lookup: Screening ID → latest approval decision (normalized to
+  // uppercase so "Approved" / "APPROVED" / "approved" all map to "APPROVED").
+  const latestDecision = new Map<string, string>();
+  for (const d of decisions) {
+    const sid = (d["Screening ID (Auto)"] ?? "").trim();
+    const raw = (d["Approval Decision"] ?? "").trim().toUpperCase();
+    // Map common variations to canonical values
+    let decision = raw;
+    if (raw === "APPROVE" || raw === "APPROVED") decision = "APPROVED";
+    else if (raw === "REJECT" || raw === "REJECTED") decision = "REJECTED";
+    else if (raw === "HOLD" || raw === "ON HOLD") decision = "HOLD";
+    if (sid && decision) latestDecision.set(sid, decision); // later rows win
+  }
+
+  // Build lookup: Screening ID → offer letter issued?
+  const issuedSet = new Set<string>();
+  for (const i of issued) {
+    const sid = (i["Screening ID (Auto)"] ?? "").trim();
+    if (sid) issuedSet.add(sid);
+  }
+
+  const enriched = rows.map((r) => {
+    const sid = (r["Screening ID (Auto)"] ?? "").trim();
+    const decision = latestDecision.get(sid) ?? "";
+    const wasIssued = issuedSet.has(sid);
+    return {
+      ...r,
+      "Offer Request Status": decision || "PENDING_APPROVAL",
+      "Offer Letter Issued": wasIssued ? "Yes" : "",
+    };
+  });
+
+  const screeningId = req.nextUrl.searchParams.get("screeningId");
   if (screeningId) {
-    const offer = rows.find((r) => r["Screening ID (Auto)"] === screeningId);
+    const offer = enriched.find((r) => r["Screening ID (Auto)"] === screeningId);
     return NextResponse.json({ offer: offer ?? null });
   }
 
-  rows.sort((a, b) => (b["Timestamp"] ?? "").localeCompare(a["Timestamp"] ?? ""));
-  return NextResponse.json({ offers: rows });
+  enriched.sort((a, b) => (b["Timestamp"] ?? "").localeCompare(a["Timestamp"] ?? ""));
+  return NextResponse.json({ offers: enriched });
 }
 
 export async function POST(req: NextRequest) {
@@ -35,7 +73,13 @@ export async function POST(req: NextRequest) {
   const doc = await findRow("Documents Collection", "Screening ID (For internal use only)", screeningId);
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const approvalLink = `${appUrl}/dashboard/offers/${screeningId}`;
+  const approvalToken = await signApprovalToken({
+    screeningId,
+    candidateName: candidate["Candidate Name"] ?? "",
+    position: candidate["Position Screened for"] ?? "",
+    type: "approval_token",
+  });
+  const approvalLink = `${appUrl}/offers/approve/${approvalToken}`;
 
   await appendRowByFields("Offer Approval Request", {
     "Timestamp": ts,

@@ -16,11 +16,19 @@ export default function OffersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [userRole, setUserRole] = useState("");
+  const [tab, setTab] = useState<"PENDING_APPROVAL" | "APPROVED" | "ISSUED" | "ALL">("PENDING_APPROVAL");
 
   // Approval modal
   const [approvalModal, setApprovalModal] = useState<{ open: boolean; offer: Offer | null }>({ open: false, offer: null });
   const [aForm, setAForm] = useState({ decision: "APPROVED", approvedCTC: "", remarks: "", doj: "", designation: "" });
   const [approving, setApproving] = useState(false);
+
+  // Issue offer modal
+  const [issueModal, setIssueModal] = useState<{ open: boolean; offer: Offer | null }>({ open: false, offer: null });
+  const [issueForm, setIssueForm] = useState({ designation: "", hiringLocation: "", finalSalary: "", doj: "" });
+  const [offerLetterFile, setOfferLetterFile] = useState<File | null>(null);
+  const [issuing, setIssuing] = useState(false);
+  const [issueResult, setIssueResult] = useState<{ acceptLink: string; mailStatus: string } | null>(null);
 
   const fetchOffers = useCallback(async () => {
     setLoading(true);
@@ -36,6 +44,11 @@ export default function OffersPage() {
   }, [fetchOffers]);
 
   const filtered = offers.filter(o => {
+    const status = o["Offer Request Status"] ?? "PENDING_APPROVAL";
+    const issued = (o["Offer Letter Issued"] ?? "").toLowerCase() === "yes" || o["Stage"] === "OFFER_ISSUED";
+    if (tab === "PENDING_APPROVAL" && status !== "PENDING_APPROVAL") return false;
+    if (tab === "APPROVED" && !(status === "APPROVED" && !issued)) return false;
+    if (tab === "ISSUED" && !issued) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -45,11 +58,17 @@ export default function OffersPage() {
     );
   });
 
+  const counts = {
+    pending: offers.filter(o => (o["Offer Request Status"] ?? "PENDING_APPROVAL") === "PENDING_APPROVAL").length,
+    approved: offers.filter(o => o["Offer Request Status"] === "APPROVED").length,
+    issued: offers.filter(o => o["Stage"] === "OFFER_ISSUED").length,
+  };
+
   async function handleApprove() {
     if (!approvalModal.offer) return;
     setApproving(true);
     const id = approvalModal.offer["Screening ID (Auto)"];
-    await fetch(`/api/offers/${id}/approve`, {
+    await fetch(`/api/offers/${encodeURIComponent(id)}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(aForm),
@@ -59,6 +78,41 @@ export default function OffersPage() {
     setApproving(false);
   }
 
+  function openIssueModal(o: Offer) {
+    setIssueForm({
+      designation: o["Designation to be Offered"] ?? "",
+      hiringLocation: o["Location"] ?? "",
+      finalSalary: o["Final Salary CTC Amount (In Lakhs)"] ?? "",
+      doj: o["Date of Joining"] ?? "",
+    });
+    setOfferLetterFile(null);
+    setIssueResult(null);
+    setIssueModal({ open: true, offer: o });
+  }
+
+  async function handleIssueOffer() {
+    if (!issueModal.offer || !offerLetterFile) return;
+    setIssuing(true);
+    const fd = new FormData();
+    fd.append("screeningId", issueModal.offer["Screening ID (Auto)"]);
+    fd.append("designation", issueForm.designation);
+    fd.append("hiringLocation", issueForm.hiringLocation);
+    fd.append("finalSalary", issueForm.finalSalary);
+    fd.append("doj", issueForm.doj);
+    fd.append("offerLetter", offerLetterFile);
+
+    const res = await fetch("/api/offers/issue", { method: "POST", body: fd });
+    const data = await res.json();
+    setIssuing(false);
+    if (res.ok) {
+      setIssueResult({ acceptLink: data.acceptLink, mailStatus: data.mailStatus });
+      fetchOffers();
+    } else {
+      alert(data.error ?? "Failed to issue offer");
+    }
+  }
+
+  // Manager-level approval only. CHRO = developer/full-access.
   const canApprove = ["CHRO", "MANAGEMENT"].includes(userRole);
 
   function statusBadge(status: string) {
@@ -78,6 +132,28 @@ export default function OffersPage() {
           <h1 className="text-2xl font-bold text-slate-800">Offer Requests</h1>
           <p className="text-slate-500 text-sm mt-1">{filtered.length} offers</p>
         </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-slate-200 mb-4">
+        {([
+          ["PENDING_APPROVAL", `Pending Approval (${counts.pending})`],
+          ["APPROVED", `Ready to Issue (${counts.approved})`],
+          ["ISSUED", `Issued (${counts.issued})`],
+          ["ALL", "All"],
+        ] as const).map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setTab(k)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              tab === k
+                ? "border-emerald-500 text-emerald-700"
+                : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Search */}
@@ -115,8 +191,8 @@ export default function OffersPage() {
                   <p className="font-semibold text-slate-800">{o["Candidate Name (Auto)"]}</p>
                   <p className="text-xs text-slate-400 font-mono">{o["Screening ID (Auto)"]}</p>
                 </div>
-                <Badge className={statusBadge(o["Offer Request Status"])}>
-                  {o["Offer Request Status"] ?? "Pending"}
+                <Badge className={statusBadge(o["Offer Request Status"] || "PENDING_APPROVAL")}>
+                  {(o["Offer Letter Issued"] === "Yes" ? "ISSUED" : (o["Offer Request Status"] || "PENDING_APPROVAL")).replace("_", " ")}
                 </Badge>
               </div>
               <div className="space-y-1 text-sm text-slate-600 mb-4">
@@ -148,6 +224,11 @@ export default function OffersPage() {
                     }}
                   >
                     Review & Decide
+                  </Button>
+                )}
+                {o["Offer Request Status"] === "APPROVED" && (
+                  <Button size="sm" onClick={() => openIssueModal(o)}>
+                    Issue Offer
                   </Button>
                 )}
               </div>
@@ -224,6 +305,112 @@ export default function OffersPage() {
           <Button className="w-full" onClick={handleApprove} disabled={approving}>
             {approving ? "Processing…" : `Confirm ${aForm.decision}`}
           </Button>
+        </div>
+      </Modal>
+
+      {/* Issue Offer Modal */}
+      <Modal
+        open={issueModal.open}
+        onClose={() => { setIssueModal({ open: false, offer: null }); setIssueResult(null); }}
+        title={`Issue Offer — ${issueModal.offer?.["Candidate Name (Auto)"] ?? ""}`}
+        size="md"
+      >
+        <div className="p-6 space-y-4">
+          {issueResult ? (
+            <div className="space-y-4">
+              <div className={`border rounded-xl p-4 text-center ${
+                issueResult.mailStatus === "SENT"
+                  ? "bg-emerald-50 border-emerald-200"
+                  : "bg-yellow-50 border-yellow-200"
+              }`}>
+                <CheckCircle className={`w-10 h-10 mx-auto mb-2 ${
+                  issueResult.mailStatus === "SENT" ? "text-emerald-600" : "text-yellow-600"
+                }`} />
+                <p className={`text-sm font-semibold ${
+                  issueResult.mailStatus === "SENT" ? "text-emerald-800" : "text-yellow-800"
+                }`}>
+                  Offer letter uploaded for {issueModal.offer?.["Candidate Name (Auto)"]}
+                </p>
+                <p className={`text-xs mt-1 ${
+                  issueResult.mailStatus === "SENT" ? "text-emerald-600" : "text-yellow-700"
+                }`}>
+                  {issueResult.mailStatus === "SENT"
+                    ? "✓ Email sent to candidate"
+                    : "⚠ Email failed — share the acceptance link manually"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500 mb-1.5 font-medium">Acceptance Link (backup)</p>
+                <div className="flex items-center gap-2">
+                  <input
+                    readOnly
+                    value={issueResult.acceptLink}
+                    className="flex-1 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-600"
+                  />
+                  <button
+                    onClick={() => navigator.clipboard.writeText(issueResult.acceptLink)}
+                    className="px-3 py-2 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              <Button className="w-full" onClick={() => { setIssueModal({ open: false, offer: null }); setIssueResult(null); }}>
+                Done
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Designation"
+                  required
+                  value={issueForm.designation}
+                  onChange={e => setIssueForm(p => ({ ...p, designation: e.target.value }))}
+                />
+                <Input
+                  label="Hiring Location"
+                  value={issueForm.hiringLocation}
+                  onChange={e => setIssueForm(p => ({ ...p, hiringLocation: e.target.value }))}
+                />
+                <Input
+                  label="Final Salary (Per Annum)"
+                  required
+                  value={issueForm.finalSalary}
+                  onChange={e => setIssueForm(p => ({ ...p, finalSalary: e.target.value }))}
+                  placeholder="e.g. 550000"
+                />
+                <Input
+                  label="Date of Joining"
+                  type="date"
+                  required
+                  value={issueForm.doj}
+                  onChange={e => setIssueForm(p => ({ ...p, doj: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-600 block mb-1">
+                  Offer Letter PDF <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="file"
+                  accept=".pdf"
+                  onChange={e => setOfferLetterFile(e.target.files?.[0] ?? null)}
+                  className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+                />
+                {offerLetterFile && (
+                  <p className="text-xs text-emerald-600 mt-1">✓ {offerLetterFile.name}</p>
+                )}
+              </div>
+              <Button
+                className="w-full"
+                onClick={handleIssueOffer}
+                disabled={issuing || !offerLetterFile || !issueForm.designation || !issueForm.finalSalary || !issueForm.doj}
+              >
+                {issuing ? "Uploading & Sending…" : "Upload & Email Offer Letter"}
+              </Button>
+            </>
+          )}
         </div>
       </Modal>
     </div>

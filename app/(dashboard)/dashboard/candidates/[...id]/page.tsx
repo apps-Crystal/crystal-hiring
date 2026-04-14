@@ -16,9 +16,9 @@ import { decisionBadge, scoreBadgeClass, stageBadge } from "@/lib/utils";
 interface Candidate extends Record<string, string> {}
 interface Interview extends Record<string, string> {}
 
-export default function CandidateProfilePage({ params }: { params: Promise<{ id: string }> }) {
-  const { id: rawId } = use(params);
-  const id = decodeURIComponent(rawId);
+export default function CandidateProfilePage({ params }: { params: Promise<{ id: string[] }> }) {
+  const { id: idParts } = use(params);
+  const id = idParts.map(p => decodeURIComponent(p)).join("/");
   const router = useRouter();
 
   const [candidate, setCandidate] = useState<Candidate | null>(null);
@@ -143,9 +143,13 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
   const dec = decisionBadge(candidate["Overall Candidate Fit Assessment"]);
   const stage = stageBadge(candidate["Stage"]);
   const aiDone = candidate["AI Evaluation Status"] === "COMPLETED";
-  const canViewSalary = ["CHRO", "TA_HEAD", "MANAGEMENT"].includes(userRole);
-  const canInterview = ["CHRO", "TA_HEAD", "HR_SENIOR"].includes(userRole);
-  const canRequestDocs = ["CHRO", "TA_HEAD"].includes(userRole);
+  // CHRO / developer account has full access to every action.
+  const isFullAccess = ["CHRO", "TA_HEAD", "MANAGEMENT"].includes(userRole);
+  const canViewSalary = isFullAccess;
+  const canInterview = isFullAccess || userRole === "HR_SENIOR";
+  const canRequestDocs = isFullAccess || ["HR_SENIOR", "HR_EXEC"].includes(userRole);
+  const canRaiseOffer = isFullAccess;
+  const docsStages = ["DOCUMENTS", "DOCUMENTS_SUBMITTED", "DOCUMENTS_VERIFIED"];
 
   const tabs = [
     { id: "overview", label: "Overview" },
@@ -186,18 +190,16 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
             Add Interview Round
           </Button>
         )}
-        {candidate["Stage"] === "INTERVIEW" && canRequestDocs && (
+        {canRequestDocs && !["REJECTED", "CLOSED"].includes(candidate["Stage"]) && (
           <Button variant="secondary" onClick={requestDocuments} disabled={requestingDocs}>
             <Send className="w-4 h-4" />
-            {requestingDocs ? "Sending…" : "Request Documents"}
+            {requestingDocs ? "Sending…" : "Send Document Collection Link"}
           </Button>
         )}
-        {candidate["Stage"] === "DOCUMENTS" && canRequestDocs && (
-          <Button
-            variant="secondary"
-            onClick={() => router.push(`/dashboard/documents/${id}`)}
-          >
-            View Documents
+        {canRaiseOffer && docsStages.includes(candidate["Stage"]) && (
+          <Button onClick={() => router.push(`/dashboard/offers/new?screeningId=${id}`)}>
+            <FileText className="w-4 h-4" />
+            Raise Offer Approval Request
           </Button>
         )}
         {candidate["Upload Resume:"] && (
@@ -444,7 +446,7 @@ export default function CandidateProfilePage({ params }: { params: Promise<{ id:
               <p className="font-medium text-slate-800">{candidate["Notice Period"] || "—"}</p>
             </div>
           </div>
-          {candidate["Stage"] === "DOCUMENTS" && ["CHRO", "TA_HEAD"].includes(userRole) && (
+          {canRaiseOffer && docsStages.includes(candidate["Stage"]) && (
             <div className="mt-6 pt-4 border-t border-slate-100">
               <Button onClick={() => router.push(`/dashboard/offers/new?screeningId=${id}`)}>
                 Raise Offer Approval Request

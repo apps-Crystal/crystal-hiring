@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readSheet, appendRowByFields, findRow, nowTimestamp } from "@/lib/sheets";
-import { getSession } from "@/lib/auth";
+import { readSheetWithLinks, appendRowByFields, findRow, nowTimestamp } from "@/lib/sheets";
+import { getSession, signDocumentToken } from "@/lib/auth";
 import { sendDocumentRequest } from "@/lib/email";
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const rows = await readSheet("Documents Collection");
+  const rows = await readSheetWithLinks("Documents Collection");
   const screeningId = req.nextUrl.searchParams.get("screeningId");
 
   if (screeningId) {
@@ -31,7 +31,13 @@ export async function POST(req: NextRequest) {
     if (!candidate) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-    const uploadLink = `${appUrl}/documents/${screeningId}`;
+    const token = await signDocumentToken({
+      screeningId,
+      candidateName: candidate["Candidate Name"] ?? "",
+      position: candidate["Position Screened for"] ?? "",
+      type: "document_token",
+    });
+    const uploadLink = `${appUrl}/documents/submit/${token}`;
 
     // Update stage
     const { updateRowByKey } = await import("@/lib/sheets");

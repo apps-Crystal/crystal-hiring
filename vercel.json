@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "app/api/screening/[id]/evaluate/route.ts": { "maxDuration": 60 },
+    "app/api/documents/verify/route.ts": { "maxDuration": 60 },
+    "app/api/documents/public/[token]/route.ts": { "maxDuration": 60 },
+    "app/api/offers/issue/route.ts": { "maxDuration": 60 },
+    "app/api/offers/public/accept/[token]/route.ts": { "maxDuration": 60 },
+    "app/api/upload/route.ts": { "maxDuration": 60 }
+  }
+}

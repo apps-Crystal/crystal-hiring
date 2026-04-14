@@ -302,6 +302,11 @@ export interface DocumentVerificationResult {
   recommendation: string;
 }
 
+export interface DocumentFile {
+  base64: string;
+  mimeType: string;
+}
+
 export async function verifyDocuments(params: {
   candidateName: string;
   screeningData: {
@@ -310,47 +315,124 @@ export async function verifyDocuments(params: {
     totalExperience: string;
     currentCTC: string;
   };
-  documentUrls: {
-    idProof?: string;
-    degree?: string;
-    appointmentLetter?: string;
-    paySlips?: string;
-    latestCV?: string;
+  files: {
+    idProof?: DocumentFile;
+    degree?: DocumentFile;
+    appointmentLetter?: DocumentFile;
+    paySlips?: DocumentFile;
+    latestCV?: DocumentFile;
   };
 }): Promise<DocumentVerificationResult> {
   const client = getClient();
 
-  const prompt = `You are a document verification specialist for Crystal Group HR team.
+  // Build multimodal content: each present doc gets a labelled image, then one text block at the end.
+  type Part =
+    | { type: "image_url"; image_url: { url: string } }
+    | { type: "text"; text: string };
 
-Candidate: ${params.candidateName}
-Screening Data on File:
-- Current Company: ${params.screeningData.currentCompany}
-- Current Role: ${params.screeningData.currentRole}
-- Total Experience: ${params.screeningData.totalExperience}
-- Current CTC: ${params.screeningData.currentCTC}
+  const parts: Part[] = [];
 
-Documents submitted (URLs provided for reference):
-- ID Proof: ${params.documentUrls.idProof ?? "Not submitted"}
-- Degree Certificate: ${params.documentUrls.degree ?? "Not submitted"}
-- Appointment Letter: ${params.documentUrls.appointmentLetter ?? "Not submitted"}
-- Pay Slips (3 months): ${params.documentUrls.paySlips ?? "Not submitted"}
-- Latest CV: ${params.documentUrls.latestCV ?? "Not submitted"}
+  const addDoc = (label: string, f?: DocumentFile) => {
+    if (!f) return;
+    parts.push({ type: "text", text: `═══ ${label} ═══` });
+    parts.push({
+      type: "image_url",
+      image_url: { url: `data:${f.mimeType};base64,${f.base64}` },
+    });
+  };
 
-Based on document completeness, return ONLY valid JSON:
+  addDoc("DOCUMENT 1 — ID PROOF", params.files.idProof);
+  addDoc("DOCUMENT 2 — DEGREE CERTIFICATE", params.files.degree);
+  addDoc("DOCUMENT 3 — APPOINTMENT LETTER", params.files.appointmentLetter);
+  addDoc("DOCUMENT 4 — PAY SLIPS (LAST 3 MONTHS)", params.files.paySlips);
+  addDoc("DOCUMENT 5 — LATEST CV / RESUME", params.files.latestCV);
+
+  const submittedCount = Object.values(params.files).filter(Boolean).length;
+
+  if (submittedCount === 0) {
+    return {
+      status: "INCOMPLETE",
+      idProofCheck: "Not submitted",
+      degreeCheck: "Not submitted",
+      appointmentCheck: "Not submitted",
+      paySlipsCheck: "Not submitted",
+      cvCheck: "Not submitted",
+      flags: "No documents submitted",
+      recommendation: "Candidate must upload documents before verification can run",
+    };
+  }
+
+  const submittedList = [
+    params.files.idProof ? "ID Proof" : null,
+    params.files.degree ? "Degree" : null,
+    params.files.appointmentLetter ? "Appointment Letter" : null,
+    params.files.paySlips ? "Pay Slips" : null,
+    params.files.latestCV ? "CV" : null,
+  ].filter(Boolean).join(", ");
+
+  const missingList = [
+    !params.files.idProof ? "ID Proof" : null,
+    !params.files.degree ? "Degree" : null,
+    !params.files.appointmentLetter ? "Appointment Letter" : null,
+    !params.files.paySlips ? "Pay Slips" : null,
+    !params.files.latestCV ? "CV" : null,
+  ].filter(Boolean).join(", ");
+
+  const prompt = `You are a strict document verification specialist for Crystal Group HR.
+
+You have been shown actual document images above (not URLs — the real content). For each document, you must:
+1. Identify whether it is actually the document type it claims to be. Reject mismatched files (e.g. a UI screenshot uploaded as ID Proof must be flagged).
+2. Extract the candidate's name, employer name, designation, dates, and any salary/CTC info you can read.
+3. Cross-check against the candidate's screening data below.
+4. Flag any discrepancy.
+
+═══ CANDIDATE SCREENING DATA ═══
+Name on file: ${params.candidateName}
+Current Company: ${params.screeningData.currentCompany || "Not specified"}
+Current Role: ${params.screeningData.currentRole || "Not specified"}
+Total Experience: ${params.screeningData.totalExperience || "Not specified"}
+Current CTC: ${params.screeningData.currentCTC || "Not specified"}
+
+═══ DOCUMENTS PROVIDED ═══
+Submitted: ${submittedList || "None"}
+Missing: ${missingList || "None"}
+
+VERIFICATION RULES:
+- ID Proof must be a government-issued ID (Aadhaar / PAN / Passport / Driving License / Voter ID). Reject anything else.
+- Degree must be an educational certificate from a recognised university/board. Reject mark sheets only if the candidate has also uploaded no degree.
+- Appointment Letter must be from a previous/current employer with candidate's name, designation, and date.
+- Pay Slips must be 3 months of salary slips showing the candidate's name and employer.
+- CV must be a structured resume.
+- Names across documents MUST match (allow for minor spelling variations).
+- Employer on appointment letter and pay slips SHOULD match the "Current Company" from screening data.
+
+For each document, return ONE of:
+- "OK — <short evidence: name extracted, employer, dates>"
+- "ISSUE — <specific problem, e.g. 'Not an ID proof — appears to be a screenshot of an internal app', 'Name mismatch: doc says Raj Kumar, candidate is Arpan Mallik'>"
+- "Not submitted" (only if the file was not provided)
+
+Status rules:
+- "VERIFIED" — all 5 submitted, all OK, no mismatches
+- "FLAGS_FOUND" — at least one document has an issue (wrong type, name mismatch, employer mismatch, salary mismatch, invalid content)
+- "INCOMPLETE" — one or more required documents not submitted AND no issues found with submitted ones
+
+Return ONLY valid JSON in this exact shape:
 {
   "status": "VERIFIED" | "FLAGS_FOUND" | "INCOMPLETE",
-  "idProofCheck": "OK/Issue description",
-  "degreeCheck": "OK/Issue description",
-  "appointmentCheck": "OK/Issue description",
-  "paySlipsCheck": "OK/Issue description",
-  "cvCheck": "OK/Issue description",
-  "flags": "List any discrepancies or missing items",
-  "recommendation": "Brief recommendation"
+  "idProofCheck": "...",
+  "degreeCheck": "...",
+  "appointmentCheck": "...",
+  "paySlipsCheck": "...",
+  "cvCheck": "...",
+  "flags": "concise summary of ALL issues, or 'None'",
+  "recommendation": "next action for HR"
 }`;
 
+  parts.push({ type: "text", text: prompt });
+
   const res = await client.chat.completions.create({
-    model: MODEL_TEXT,
-    messages: [{ role: "user", content: prompt }],
+    model: MODEL_VISION,
+    messages: [{ role: "user", content: parts }],
     response_format: { type: "json_object" },
   });
 

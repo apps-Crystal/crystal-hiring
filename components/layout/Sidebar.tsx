@@ -4,7 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Briefcase, Users, ClipboardList, FileText,
-  CheckSquare, Settings, LogOut, BarChart3, Star
+  CheckSquare, Settings, LogOut, BarChart3, Star, FolderCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +37,12 @@ const nav: NavItem[] = [
     href: "/dashboard/interviews",
     label: "Interviews",
     icon: <Star className="w-4 h-4" />,
+    roles: ["CHRO", "TA_HEAD", "HR_SENIOR"],
+  },
+  {
+    href: "/dashboard/documents",
+    label: "Documents",
+    icon: <FolderCheck className="w-4 h-4" />,
     roles: ["CHRO", "TA_HEAD", "HR_SENIOR"],
   },
   {

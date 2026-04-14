@@ -178,7 +178,7 @@ export default function CandidatesPage() {
                     <tr
                       key={c["Screening ID"]}
                       className="hover:bg-slate-50 cursor-pointer transition-colors"
-                      onClick={() => router.push(`/dashboard/candidates/${encodeURIComponent(c["Screening ID"])}`)}
+                      onClick={() => router.push(`/dashboard/candidates/${c["Screening ID"]}`)}
                     >
                       <td className="px-4 py-3">
                         <p className="font-medium text-slate-800">{c["Candidate Name"] || "—"}</p>
